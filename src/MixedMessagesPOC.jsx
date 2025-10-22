@@ -169,6 +169,7 @@ export default function MixedMessagesPOC() {
   const [circleColors, setCircleColors] = useState({})
   const timerRef = useRef(null)
   const buildTimersRef = useRef([])
+  const phraseIndicesRef = useRef([])
 
   const { gridWords, wordIndex } = useMemo(() => {
     const phraseWords = PHRASES.map((p) => p.toUpperCase().split(/\s+/))
@@ -228,14 +229,86 @@ export default function MixedMessagesPOC() {
     })
   }
 
+  // useEffect(() => {
+  //   function startSequence() {
+  //     // reset timers + state
+  //     for (const id of buildTimersRef.current) window.clearTimeout(id)
+  //     if (timerRef.current) window.clearTimeout(timerRef.current)
+  //     buildTimersRef.current = []
+  //     timerRef.current = null
+  //     setLit(new Set())
+
+  //     const baseWords = allPhraseWords[phraseIdx] || []
+  //     const displayWords = baseWords.slice(0, 8)
+  //     const indices = chooseOrderedIndices(displayWords, wordIndex)
+
+  //     const addDelay = (t, fn) => {
+  //       const id = window.setTimeout(fn, Math.max(1, t / speed))
+  //       buildTimersRef.current.push(id)
+  //     }
+
+  //     let t = 0
+  //     const fadeOverlapStart = HOLD_MS // begin fade out
+  //     const nextStartOffset = HOLD_MS + 0.35 * FADE_MS // next starts at 75% of prev's fade
+
+  //     indices.forEach((idx) => {
+  //       // fade in this word
+  //       addDelay(t, () => {
+  //         const color =
+  //           PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)]
+  //         setCircleColors((prev) => ({ ...prev, [idx]: color }))
+  //         setLit(new Set([idx]))
+  //       })
+
+  //       // start fade out after HOLD_MS
+  //       addDelay(t + fadeOverlapStart, () => {
+  //         setLit(new Set()) // triggers the FADE_MS transition back to base
+  //       })
+
+  //       // advance the base time for the next word
+  //       t += nextStartOffset
+  //     })
+
+  //     // after the last word finishes its fade, pause, then advance phrase
+  //     const lastRemoveAt =
+  //       (indices.length - 1) * nextStartOffset + fadeOverlapStart + FADE_MS
+  //     addDelay(lastRemoveAt + PHRASE_PAUSE_MS, () => {
+  //       setOrderPos((pos) => {
+  //         const nextPos = pos + 1
+  //         if (nextPos < order.length) {
+  //           setPhraseIdx(order[nextPos])
+  //           return nextPos
+  //         } else {
+  //           const newOrder = shuffle([...Array(PHRASES.length).keys()])
+  //           setOrder(newOrder)
+  //           setPhraseIdx(newOrder[0])
+  //           return 0
+  //         }
+  //       })
+  //     })
+  //   }
+
+  //   if (playing) {
+  //     startSequence()
+  //     return () => {
+  //       for (const id of buildTimersRef.current) window.clearTimeout(id)
+  //       if (timerRef.current) window.clearTimeout(timerRef.current)
+  //       buildTimersRef.current = []
+  //       timerRef.current = null
+  //     }
+  //   }
+  // }, [playing, phraseIdx, allPhraseWords, wordIndex, speed])
+
   useEffect(() => {
-    function startSequence() {
-      // reset timers + state
+    function clearAllTimers() {
       for (const id of buildTimersRef.current) window.clearTimeout(id)
       if (timerRef.current) window.clearTimeout(timerRef.current)
       buildTimersRef.current = []
       timerRef.current = null
-      setLit(new Set())
+    }
+
+    function startSequence() {
+      clearAllTimers()
 
       const baseWords = allPhraseWords[phraseIdx] || []
       const displayWords = baseWords.slice(0, 8)
@@ -247,31 +320,51 @@ export default function MixedMessagesPOC() {
       }
 
       let t = 0
-      const fadeOverlapStart = HOLD_MS // begin fade out
-      const nextStartOffset = HOLD_MS + 0.35 * FADE_MS // next starts at 75% of prev's fade
+      const WORD_STEP_MS = BUILD_STEP_MS // spacing between each word's fade-in
 
-      indices.forEach((idx) => {
-        // fade in this word
+      // Crossfade: at t=0 remove ALL previous phrase words, add first new word
+      const prevPhrase = phraseIndicesRef.current || []
+      addDelay(t, () => {
+        const firstIdx = indices[0]
+        const color =
+          PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)]
+
+        setLit((prev) => {
+          const next = new Set(prev)
+          // fade out the entire previous phrase in CSS while we add the first new word
+          prevPhrase.forEach((p) => next.delete(p))
+          if (typeof firstIdx === 'number') next.add(firstIdx)
+          return next
+        })
+        if (typeof firstIdx === 'number') {
+          setCircleColors((prev) => ({ ...prev, [firstIdx]: color }))
+          phraseIndicesRef.current = [firstIdx]
+        } else {
+          phraseIndicesRef.current = []
+        }
+      })
+
+      // Fade in remaining words cumulatively (no per-word fade-out)
+      for (let k = 1; k < indices.length; k++) {
+        const idx = indices[k]
+        t += WORD_STEP_MS
         addDelay(t, () => {
           const color =
             PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)]
           setCircleColors((prev) => ({ ...prev, [idx]: color }))
-          setLit(new Set([idx]))
+          setLit((prev) => {
+            const next = new Set(prev)
+            next.add(idx) // keep all previous words lit
+            return next
+          })
+          phraseIndicesRef.current = [...phraseIndicesRef.current, idx]
         })
+      }
 
-        // start fade out after HOLD_MS
-        addDelay(t + fadeOverlapStart, () => {
-          setLit(new Set()) // triggers the FADE_MS transition back to base
-        })
-
-        // advance the base time for the next word
-        t += nextStartOffset
-      })
-
-      // after the last word finishes its fade, pause, then advance phrase
-      const lastRemoveAt =
-        (indices.length - 1) * nextStartOffset + fadeOverlapStart + FADE_MS
-      addDelay(lastRemoveAt + PHRASE_PAUSE_MS, () => {
+      // Hold on the full phrase, then short pause, then advance (next phrase will crossfade the whole thing)
+      const totalTime =
+        (indices.length - 1) * WORD_STEP_MS + HOLD_MS + PHRASE_PAUSE_MS
+      addDelay(totalTime, () => {
         setOrderPos((pos) => {
           const nextPos = pos + 1
           if (nextPos < order.length) {
@@ -289,12 +382,9 @@ export default function MixedMessagesPOC() {
 
     if (playing) {
       startSequence()
-      return () => {
-        for (const id of buildTimersRef.current) window.clearTimeout(id)
-        if (timerRef.current) window.clearTimeout(timerRef.current)
-        buildTimersRef.current = []
-        timerRef.current = null
-      }
+      return clearAllTimers
+    } else {
+      clearAllTimers()
     }
   }, [playing, phraseIdx, allPhraseWords, wordIndex, speed])
 
