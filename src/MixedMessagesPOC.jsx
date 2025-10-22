@@ -12,7 +12,7 @@ const GAP_PX = 12
 // timings (ms)
 const FADE_MS = 1500 // fade duration
 const HOLD_MS = 1800 // how long a single word stays fully visible
-const BUILD_STEP_MS = 1000 // time between word starts; next starts when prev is 75% faded
+const BUILD_STEP_MS = 1000 // time between word starts
 const PHRASE_PAUSE_MS = 1500 // pause between phrases
 
 // 20 motivational phrases (3–8 words each)
@@ -228,7 +228,11 @@ export default function MixedMessagesPOC() {
 
   useEffect(() => {
     function startSequence() {
-      clearTimers()
+      // reset timers + state
+      for (const id of buildTimersRef.current) window.clearTimeout(id)
+      if (timerRef.current) window.clearTimeout(timerRef.current)
+      buildTimersRef.current = []
+      timerRef.current = null
       setLit(new Set())
 
       const baseWords = allPhraseWords[phraseIdx] || []
@@ -241,33 +245,54 @@ export default function MixedMessagesPOC() {
       }
 
       let t = 0
-      const fadeOverlapStart = HOLD_MS
-      const nextStartOffset = HOLD_MS + 0.75 * FADE_MS
+      const fadeOverlapStart = HOLD_MS // begin fade out
+      const nextStartOffset = HOLD_MS + 0.35 * FADE_MS // next starts at 75% of prev's fade
 
       indices.forEach((idx) => {
+        // fade in this word
         addDelay(t, () => {
           const color =
             PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)]
           setCircleColors((prev) => ({ ...prev, [idx]: color }))
           setLit(new Set([idx]))
         })
-        addDelay(t + fadeOverlapStart, () => setLit(new Set()))
+
+        // start fade out after HOLD_MS
+        addDelay(t + fadeOverlapStart, () => {
+          setLit(new Set()) // triggers the FADE_MS transition back to base
+        })
+
+        // advance the base time for the next word
         t += nextStartOffset
       })
 
-      const totalTime =
-        (indices.length - 1) * nextStartOffset +
-        fadeOverlapStart +
-        FADE_MS +
-        PHRASE_PAUSE_MS
-      addDelay(totalTime, advancePhrase)
+      // after the last word finishes its fade, pause, then advance phrase
+      const lastRemoveAt =
+        (indices.length - 1) * nextStartOffset + fadeOverlapStart + FADE_MS
+      addDelay(lastRemoveAt + PHRASE_PAUSE_MS, () => {
+        setOrderPos((pos) => {
+          const nextPos = pos + 1
+          if (nextPos < order.length) {
+            setPhraseIdx(order[nextPos])
+            return nextPos
+          } else {
+            const newOrder = shuffle([...Array(PHRASES.length).keys()])
+            setOrder(newOrder)
+            setPhraseIdx(newOrder[0])
+            return 0
+          }
+        })
+      })
     }
 
     if (playing) {
       startSequence()
-      return clearTimers
-    } else {
-      clearTimers()
+      return () => {
+        for (const id of buildTimersRef.current) window.clearTimeout(id)
+        if (timerRef.current) window.clearTimeout(timerRef.current)
+        buildTimersRef.current = []
+        timerRef.current = null
+      }
     }
   }, [playing, phraseIdx, allPhraseWords, wordIndex, speed])
 
@@ -286,8 +311,12 @@ export default function MixedMessagesPOC() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setPlaying((p) => !p)}
-            className="px-3 py-1.5 rounded-2xl shadow-sm border border-zinc-700 hover:border-zinc-500 transition"
-            style={{ background: 'transparent' }}
+            className="px-3 py-1.5 rounded-2xl shadow-sm border  border-zinc-700 hover:border-zinc-500 transition"
+            style={{
+              background: 'transparent',
+              marginLeft: 10,
+              color: '#DDDDDD',
+            }}
           >
             {playing ? 'Pause' : 'Play'}
           </button>
