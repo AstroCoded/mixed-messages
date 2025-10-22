@@ -1,5 +1,5 @@
-// Mixed Messages — Web POC (React)
-// FADE_MS=1500; random pastel per fade-in; single-word mode; 100px circles; 1.5s phrase pause
+// Mixed Messages — POC (React)
+// Cumulative phrase build, reverse-stagger phrase fade-out (<=1s), configurable next-phrase delay
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -10,10 +10,10 @@ const POT_PX = 100 // circle size
 const GAP_PX = 12
 
 // timings (ms)
-const FADE_MS = 1500 // fade duration
-const HOLD_MS = 1800 // how long a single word stays fully visible
-const BUILD_STEP_MS = 1000 // time between word starts
-const PHRASE_PAUSE_MS = 1500 // pause between phrases
+const FADE_MS = 1500 // visual fade duration for each circle/text
+const HOLD_MS = 2500 // how long the last-added word stays fully visible before phrase fade-out
+const BUILD_STEP_MS = 1000 // spacing between each word's fade-in
+const NEXT_PHRASE_DELAY_MS = 2000 // wait after phrase fully faded out (stagger finished) before next phrase starts
 
 // 20 motivational phrases (3–8 words each)
 const PHRASES = [
@@ -167,9 +167,10 @@ export default function MixedMessagesPOC() {
   )
   const [lit, setLit] = useState(new Set())
   const [circleColors, setCircleColors] = useState({})
+
   const timerRef = useRef(null)
   const buildTimersRef = useRef([])
-  const phraseIndicesRef = useRef([])
+  const phraseIndicesRef = useRef([]) // track indices lit for current phrase (in order)
 
   const { gridWords, wordIndex } = useMemo(() => {
     const phraseWords = PHRASES.map((p) => p.toUpperCase().split(/\s+/))
@@ -205,30 +206,7 @@ export default function MixedMessagesPOC() {
     []
   )
 
-  function clearTimers() {
-    for (const id of buildTimersRef.current) window.clearTimeout(id)
-    if (timerRef.current) window.clearTimeout(timerRef.current)
-    buildTimersRef.current = []
-    timerRef.current = null
-  }
-
-  function advancePhrase() {
-    setOrderPos((pos) => {
-      const nextPos = pos + 1
-      if (nextPos < order.length) {
-        // still have phrases left in this shuffle
-        setPhraseIdx(order[nextPos])
-        return nextPos
-      } else {
-        // reached the end of the shuffle — reshuffle and continue
-        const newOrder = shuffle([...Array(PHRASES.length).keys()])
-        setOrder(newOrder)
-        setPhraseIdx(newOrder[0])
-        return 0 // restart at first phrase in new order
-      }
-    })
-  }
-
+  // ------------ Phrase scheduling (cumulative build + reverse-stagger fade-out) ------------
   useEffect(() => {
     function clearAllTimers() {
       for (const id of buildTimersRef.current) window.clearTimeout(id)
@@ -241,33 +219,35 @@ export default function MixedMessagesPOC() {
       clearAllTimers()
 
       const baseWords = allPhraseWords[phraseIdx] || []
-      const displayWords = baseWords.slice(0, 8)
+      const displayWords = baseWords.slice(0, 8) // clamp to 8 max
       const indices = chooseOrderedIndices(displayWords, wordIndex)
 
+      // speed-scaled delay (your normal timing)
       const addDelay = (t, fn) => {
         const id = window.setTimeout(fn, Math.max(1, t / speed))
         buildTimersRef.current.push(id)
       }
+      // real-time (unscaled) delay: ensures stagger finishes within ~1s regardless of speed slider
+      const addDelayNoScale = (t, fn) => {
+        const id = window.setTimeout(fn, Math.max(1, t))
+        buildTimersRef.current.push(id)
+      }
 
       let t = 0
-      const WORD_STEP_MS = BUILD_STEP_MS // spacing between each word's fade-in
+      const WORD_STEP_MS = BUILD_STEP_MS
 
-      // Crossfade: at t=0 remove ALL previous phrase words, add first new word
-      const prevPhrase = phraseIndicesRef.current || []
+      // Fade in the first word
       addDelay(t, () => {
         const firstIdx = indices[0]
-        const color =
-          PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)]
-
-        setLit((prev) => {
-          const next = new Set(prev)
-          // fade out the entire previous phrase in CSS while we add the first new word
-          prevPhrase.forEach((p) => next.delete(p))
-          if (typeof firstIdx === 'number') next.add(firstIdx)
-          return next
-        })
         if (typeof firstIdx === 'number') {
+          const color =
+            PASTEL_COLORS[Math.floor(Math.random() * PASTEL_COLORS.length)]
           setCircleColors((prev) => ({ ...prev, [firstIdx]: color }))
+          setLit((prev) => {
+            const next = new Set(prev)
+            next.add(firstIdx)
+            return next
+          })
           phraseIndicesRef.current = [firstIdx]
         } else {
           phraseIndicesRef.current = []
@@ -284,28 +264,48 @@ export default function MixedMessagesPOC() {
           setCircleColors((prev) => ({ ...prev, [idx]: color }))
           setLit((prev) => {
             const next = new Set(prev)
-            next.add(idx) // keep all previous words lit
+            next.add(idx)
             return next
           })
           phraseIndicesRef.current = [...phraseIndicesRef.current, idx]
         })
       }
 
-      // Hold on the full phrase, then short pause, then advance (next phrase will crossfade the whole thing)
-      const totalTime =
-        (indices.length - 1) * WORD_STEP_MS + HOLD_MS + PHRASE_PAUSE_MS
-      addDelay(totalTime, () => {
-        setOrderPos((pos) => {
-          const nextPos = pos + 1
-          if (nextPos < order.length) {
-            setPhraseIdx(order[nextPos])
-            return nextPos
-          } else {
-            const newOrder = shuffle([...Array(PHRASES.length).keys()])
-            setOrder(newOrder)
-            setPhraseIdx(newOrder[0])
-            return 0
-          }
+      // After last word is built, hold, then reverse-stagger fade-out the entire phrase
+      const phraseBuiltAt = t // time when last word started
+      const afterHold = phraseBuiltAt + HOLD_MS
+
+      addDelay(afterHold, () => {
+        const current = (phraseIndicesRef.current || []).slice().reverse() // reverse order
+        if (current.length === 0) return
+
+        const totalStagger = 1000 // <=1s total
+        const step = Math.max(1, Math.floor(totalStagger / current.length))
+
+        current.forEach((cellIdx, j) => {
+          addDelayNoScale(step * j, () => {
+            setLit((prev) => {
+              const next = new Set(prev)
+              next.delete(cellIdx)
+              return next
+            })
+          })
+        })
+
+        // After stagger finished, wait extra gap, then advance to next phrase
+        addDelayNoScale(totalStagger + NEXT_PHRASE_DELAY_MS, () => {
+          setOrderPos((pos) => {
+            const nextPos = pos + 1
+            if (nextPos < order.length) {
+              setPhraseIdx(order[nextPos])
+              return nextPos
+            } else {
+              const newOrder = shuffle([...Array(PHRASES.length).keys()])
+              setOrder(newOrder)
+              setPhraseIdx(newOrder[0])
+              return 0
+            }
+          })
         })
       })
     }
@@ -318,31 +318,62 @@ export default function MixedMessagesPOC() {
     }
   }, [playing, phraseIdx, allPhraseWords, wordIndex, speed])
 
+  // ------------ Layout sizes ------------
   const wallW = COLS * POT_PX + (COLS - 1) * GAP_PX
   const wallH = ROWS * POT_PX + (ROWS - 1) * GAP_PX
 
+  // ------------ Render ------------
   return (
     <div
-      className="min-h-screen w-full text-zinc-200 flex flex-col items-center py-10"
-      style={{ backgroundColor: '#0f0f10' }}
+      style={{
+        minHeight: '100vh',
+        width: '100%',
+        backgroundColor: '#0f0f10',
+        color: '#e5e7eb',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        padding: '40px 16px',
+      }}
     >
-      <div className="w-full max-w-5xl px-4 mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold tracking-tight">
-          Mixed Messages — Web POC
+      {/* Header / Controls */}
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 1100,
+          padding: '0 8px',
+          marginBottom: 24,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+        }}
+      >
+        <h1
+          style={{
+            margin: 0,
+            fontSize: 20,
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
+          }}
+        >
+          Mixed Messages — POC
         </h1>
-        <div className="flex items-center gap-3">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button
             onClick={() => setPlaying((p) => !p)}
-            className="px-3 py-1.5 rounded-2xl shadow-sm border  border-zinc-700 hover:border-zinc-500 transition"
             style={{
+              padding: '8px 12px',
+              borderRadius: 16,
+              border: '1px solid #3f3f46',
               background: 'transparent',
-              marginLeft: 10,
-              color: '#DDDDDD',
+              color: '#e5e7eb',
+              cursor: 'pointer',
             }}
           >
             {playing ? 'Pause' : 'Play'}
           </button>
-          <label className="text-sm opacity-80">Speed</label>
+          <span style={{ fontSize: 12, color: '#9ca3af' }}>Speed</span>
           <input
             type="range"
             min={0.5}
@@ -350,20 +381,32 @@ export default function MixedMessagesPOC() {
             step={0.1}
             value={speed}
             onChange={(e) => setSpeed(parseFloat(e.target.value))}
-            className="w-40"
+            style={{ width: 180 }}
           />
-          <div className="w-10 text-right tabular-nums text-sm">
+          <span
+            style={{
+              width: 36,
+              textAlign: 'right',
+              fontVariantNumeric: 'tabular-nums',
+              fontSize: 12,
+            }}
+          >
             {speed.toFixed(1)}×
-          </div>
+          </span>
         </div>
       </div>
 
+      {/* Grid Wall */}
       <div
-        className="rounded-3xl shadow-2xl p-6"
-        style={{ background: '#0b0b0c', border: '1px solid #1f2024' }}
+        style={{
+          background: '#0b0b0c',
+          border: '1px solid #1f2024',
+          borderRadius: 24,
+          padding: 24,
+          boxShadow: '0 25px 50px rgba(0,0,0,0.35)',
+        }}
       >
         <div
-          className="grid"
           style={{
             display: 'grid',
             gridTemplateColumns: `repeat(${COLS}, ${POT_PX}px)`,
@@ -376,37 +419,37 @@ export default function MixedMessagesPOC() {
           {gridWords.map((word, i) => {
             const isLit = lit.has(i)
             const color = circleColors[i] || '#2a2b30'
-
             return (
               <div
                 key={i}
                 style={{
-                  position: 'relative', // 👈 no Tailwind; inline instead
+                  position: 'relative',
                   width: POT_PX,
-                  height: POT_PX, // or: aspectRatio: '1 / 1' (either is fine)
+                  height: POT_PX,
                   display: 'grid',
-                  placeItems: 'center', // centers the text
+                  placeItems: 'center',
                   transition: `all ${FADE_MS}ms ease`,
                 }}
               >
                 <div
                   style={{
-                    position: 'absolute', // 👈 no Tailwind; inline instead
+                    position: 'absolute',
                     top: 0,
                     left: 0,
                     width: '100%',
                     height: '100%',
-                    borderRadius: '50%', // hard circle
+                    borderRadius: '50%',
                     backgroundColor: isLit ? color : '#2a2b30',
                     boxShadow: isLit
                       ? '0 0 24px rgba(255,255,255,0.15) inset, 0 0 24px rgba(255,255,255,0.12)'
                       : 'none',
-                    transition: `all ${FADE_MS}ms ease`,
+                    opacity: isLit ? 1 : 0.4, // visual clarity on fade
+                    transition: `opacity ${FADE_MS}ms ease, background-color ${FADE_MS}ms ease, box-shadow ${FADE_MS}ms ease`,
                   }}
                 />
                 <div
                   style={{
-                    position: 'relative', // stays above the circle
+                    position: 'relative',
                     zIndex: 1,
                     fontWeight: 700,
                     userSelect: 'none',
@@ -414,8 +457,8 @@ export default function MixedMessagesPOC() {
                     fontSize: 14,
                     letterSpacing: 0.2,
                     textAlign: 'center',
-                    transition: `color ${FADE_MS}ms ease`,
                     lineHeight: 1,
+                    transition: `color ${FADE_MS}ms ease`,
                   }}
                 >
                   {word}
