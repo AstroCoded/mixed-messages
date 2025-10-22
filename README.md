@@ -1,6 +1,6 @@
-# Mixed Messages — Web POC
+# Mixed Messages — POC
 
-React + Vite single-page app (SPA). Displays a wall of circles that light up with words to form phrases. One word visible at a time; next begins when previous is 75% through its fade-out.
+React + Vite single-page app (SPA). Displays a wall of circles that light up with words to form phrases.
 
 ## Scripts
 ```bash
