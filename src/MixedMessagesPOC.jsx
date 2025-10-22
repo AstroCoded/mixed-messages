@@ -215,13 +215,15 @@ export default function MixedMessagesPOC() {
     setOrderPos((pos) => {
       const nextPos = pos + 1
       if (nextPos < order.length) {
+        // still have phrases left in this shuffle
         setPhraseIdx(order[nextPos])
         return nextPos
       } else {
+        // reached the end of the shuffle — reshuffle and continue
         const newOrder = shuffle([...Array(PHRASES.length).keys()])
         setOrder(newOrder)
         setPhraseIdx(newOrder[0])
-        return 0
+        return 0 // restart at first phrase in new order
       }
     })
   }
